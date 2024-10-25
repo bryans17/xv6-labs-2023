@@ -26,6 +26,14 @@ extern char trampoline[]; // trampoline.S
 // must be acquired before any p->lock.
 struct spinlock wait_lock;
 
+uint64 num_procs;
+
+uint64
+getnumprocs()
+{
+  return num_procs;
+}
+
 // Allocate a page for each process's kernel stack.
 // Map it high in memory, followed by an invalid
 // guard page.
@@ -146,6 +154,7 @@ found:
   p->context.ra = (uint64)forkret;
   p->context.sp = p->kstack + PGSIZE;
 
+  num_procs += 1;
   return p;
 }
 
@@ -169,6 +178,7 @@ freeproc(struct proc *p)
   p->killed = 0;
   p->xstate = 0;
   p->state = UNUSED;
+  num_procs -= 1;
 }
 
 // Create a user page table for a given process, with no user memory,
@@ -309,6 +319,9 @@ fork(void)
   np->cwd = idup(p->cwd);
 
   safestrcpy(np->name, p->name, sizeof(p->name));
+
+  // copy trace mask to child
+  np->trace_mask = p->trace_mask;
 
   pid = np->pid;
 
