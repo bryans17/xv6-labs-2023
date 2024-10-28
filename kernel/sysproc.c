@@ -75,6 +75,13 @@ int
 sys_pgaccess(void)
 {
   // lab pgtbl: your code here.
+  uint64 vaddr_upg;
+  int num_pgs;
+  uint64 buffer_addr;
+  argaddr(0, &vaddr_upg);
+  argint(1, &num_pgs);
+  argaddr(2, &buffer_addr);
+  pg_access(vaddr_upg, num_pgs, buffer_addr, myproc()->pagetable);
   return 0;
 }
 #endif
@@ -100,3 +107,4 @@ sys_uptime(void)
   release(&tickslock);
   return xticks;
 }
+
