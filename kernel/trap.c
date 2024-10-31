@@ -46,10 +46,10 @@ usertrap(void)
   w_stvec((uint64)kernelvec);
 
   struct proc *p = myproc();
-  
+
   // save user program counter.
   p->trapframe->epc = r_sepc();
-  
+
   if(r_scause() == 8){
     // system call
 
@@ -77,8 +77,16 @@ usertrap(void)
     exit(-1);
 
   // give up the CPU if this is a timer interrupt.
-  if(which_dev == 2)
+  if(which_dev == 2) {
+    if(p->pending_alarm==0 && !(p->alarm_interval == 0 && p->alarm_fn == 0)&&ticks-p->triggered_at >= p->alarm_interval) {
+        p->pending_alarm = 1;
+        p->sig_return_frame = *p->trapframe;
+        p->trapframe->epc = p->alarm_fn;
+        p->triggered_at = ticks;
+    }
+
     yield();
+  }
 
   usertrapret();
 }
@@ -109,7 +117,7 @@ usertrapret(void)
 
   // set up the registers that trampoline.S's sret will use
   // to get to user space.
-  
+
   // set S Previous Privilege mode to User.
   unsigned long x = r_sstatus();
   x &= ~SSTATUS_SPP; // clear SPP to 0 for user mode
@@ -138,7 +146,7 @@ kerneltrap()
   uint64 sepc = r_sepc();
   uint64 sstatus = r_sstatus();
   uint64 scause = r_scause();
-  
+
   if((sstatus & SSTATUS_SPP) == 0)
     panic("kerneltrap: not from supervisor mode");
   if(intr_get() != 0)
@@ -180,7 +188,7 @@ devintr()
   uint64 scause = r_scause();
 
   if((scause & 0x8000000000000000L) &&
-     (scause & 0xff) == 9){
+    (scause & 0xff) == 9){
     // this is a supervisor external interrupt, via PLIC.
 
     // irq indicates which device interrupted.
@@ -208,7 +216,7 @@ devintr()
     if(cpuid() == 0){
       clockintr();
     }
-    
+
     // acknowledge the software interrupt by clearing
     // the SSIP bit in sip.
     w_sip(r_sip() & ~2);
@@ -219,3 +227,17 @@ devintr()
   }
 }
 
+
+uint64 sigalarm(int interval, uint64 fn) {
+  struct proc *p = myproc();
+  p->alarm_interval = interval;
+  p->alarm_fn = fn;
+  p->triggered_at = ticks;
+  return 0;
+}
+
+uint64 sigreturn(void) {
+  myproc()->pending_alarm = 0;
+  *myproc()->trapframe=myproc()->sig_return_frame;
+  return myproc()->trapframe->a0;
+}
