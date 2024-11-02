@@ -29,6 +29,43 @@ trapinithart(void)
   w_stvec((uint64)kernelvec);
 }
 
+// handle cow
+uint64 cow(pagetable_t pagetable, uint64 addr) {
+  // to pass MAXVAPlus
+  if(addr >= MAXVA) return -1;
+
+  char* mem;
+  uint64 pg_start = PGROUNDDOWN(addr);
+  // check whether this pte is a COW page else it's an error
+  pte_t* pte = walk(pagetable, addr, 0);
+  if(pte == 0 || (*pte & (PTE_RSW))==0 || (*pte & PTE_V) == 0 || (*pte & PTE_U) == 0) return -1;
+  uint64 pa = PTE2PA(*pte);
+  uint64 arc = get_arc(pa);
+  // dont need to allocate
+  if(arc == 1) {
+    *pte |= PTE_W;
+    *pte &= ~(PTE_RSW);
+  } else if(arc > 1) {
+    // allocate new page
+    if((mem=kalloc())==0) {
+      return -1;
+    }
+    uint64 flags = PTE_FLAGS(*pte);
+    flags |= PTE_W;
+    flags &= ~(PTE_RSW);
+    memmove(mem, (char*)pa, PGSIZE);
+    uvmunmap(pagetable, pg_start, 1, 1);
+    if(mappages(pagetable, pg_start, PGSIZE, (uint64)mem, flags) != 0) {
+      kfree(mem);
+      return -1;
+    }
+  } else {
+    // neg arc
+    return -1;
+  }
+  return 0;
+}
+
 //
 // handle an interrupt, exception, or system call from user space.
 // called from trampoline.S
@@ -58,6 +95,7 @@ usertrap(void)
 
     // sepc points to the ecall instruction,
     // but we want to return to the next instruction.
+    //
     p->trapframe->epc += 4;
 
     // an interrupt will change sepc, scause, and sstatus,
@@ -67,7 +105,14 @@ usertrap(void)
     syscall();
   } else if((which_dev = devintr()) != 0){
     // ok
-  } else {
+  } else if(r_scause() == 15) {
+    // 12 is a instruction fetch, 13 is read, 15 is write
+    if(cow(p->pagetable, r_stval()) < 0) {
+      // printf("write to unwrittable memory or ran out of memory for COW.");
+      setkilled(p);
+    }
+  }
+  else {
     printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
     printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
     setkilled(p);

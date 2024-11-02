@@ -12,7 +12,7 @@
 void freerange(void *pa_start, void *pa_end);
 
 extern char end[]; // first address after kernel.
-                   // defined by kernel.ld.
+// defined by kernel.ld.
 
 struct run {
   struct run *next;
@@ -23,11 +23,39 @@ struct {
   struct run *freelist;
 } kmem;
 
+// atomic reference counts for each page in physical memory
+uint64 ARC[PHYSTOP >> 12] = {0};
+struct spinlock ARC_lock;
+
+uint64 get_arc(uint64 addr) {
+  acquire(&ARC_lock);
+  uint64 ans = ARC[PA2ARCIDX(addr)];
+  release(&ARC_lock);
+  return ans;
+}
+
+void arc_inc(uint64 addr) {
+  acquire(&ARC_lock);
+  ++ARC[PA2ARCIDX(addr)];
+  release(&ARC_lock);
+}
+
+uint64 arc_dec(uint64 addr) {
+  acquire(&ARC_lock);
+  --ARC[PA2ARCIDX(addr)];
+  uint64 ans = ARC[PA2ARCIDX(addr)];
+  release(&ARC_lock);
+  return ans;
+}
+
 void
 kinit()
 {
   initlock(&kmem.lock, "kmem");
+  initlock(&ARC_lock, "ARC_lock");
+  for (int i = 0; i < PHYSTOP>>12; ++i) ARC[i] = 1;
   freerange(end, (void*)PHYSTOP);
+
 }
 
 void
@@ -51,15 +79,18 @@ kfree(void *pa)
   if(((uint64)pa % PGSIZE) != 0 || (char*)pa < end || (uint64)pa >= PHYSTOP)
     panic("kfree");
 
-  // Fill with junk to catch dangling refs.
-  memset(pa, 1, PGSIZE);
+  uint64 arc = arc_dec((uint64)pa);
+  if(arc > 0) return;
 
-  r = (struct run*)pa;
+    // Fill with junk to catch dangling refs.
+    memset(pa, 1, PGSIZE);
 
-  acquire(&kmem.lock);
-  r->next = kmem.freelist;
-  kmem.freelist = r;
-  release(&kmem.lock);
+    r = (struct run*)pa;
+
+    acquire(&kmem.lock);
+    r->next = kmem.freelist;
+    kmem.freelist = r;
+    release(&kmem.lock);
 }
 
 // Allocate one 4096-byte page of physical memory.
@@ -76,7 +107,9 @@ kalloc(void)
     kmem.freelist = r->next;
   release(&kmem.lock);
 
-  if(r)
+  if(r) {
     memset((char*)r, 5, PGSIZE); // fill with junk
+    arc_inc((uint64)r);
+  }
   return (void*)r;
 }

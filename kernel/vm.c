@@ -315,6 +315,42 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
   pte_t *pte;
   uint64 pa, i;
   uint flags;
+
+  for(i = 0; i < sz; i += PGSIZE){
+    if((pte = walk(old, i, 0)) == 0)
+      panic("uvmcopy: pte should exist");
+    if((*pte & PTE_V) == 0)
+      panic("uvmcopy: page not present");
+    pa = PTE2PA(*pte);
+    flags = PTE_FLAGS(*pte);
+    // turn off W flag
+    if(*pte & PTE_W) {
+      *pte &= ~(PTE_W);
+      flags &= ~(PTE_W);
+      // turn on RSW
+      *pte |= PTE_RSW;
+      flags |= PTE_RSW;
+    }
+    
+    if(mappages(new, i, PGSIZE, pa, flags) != 0){
+      goto err;
+    }
+    // increase page reference count
+    arc_inc(pa);
+  }
+  return 0;
+
+ err:
+  uvmunmap(new, 0, i / PGSIZE, 1);
+  return -1;
+}
+/*
+int
+uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
+{
+  pte_t *pte;
+  uint64 pa, i;
+  uint flags;
   char *mem;
 
   for(i = 0; i < sz; i += PGSIZE){
@@ -338,6 +374,7 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
   uvmunmap(new, 0, i / PGSIZE, 1);
   return -1;
 }
+*/
 
 // mark a PTE invalid for user access.
 // used by exec for the user stack guard page.
@@ -365,6 +402,7 @@ copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
     va0 = PGROUNDDOWN(dstva);
     if(va0 >= MAXVA)
       return -1;
+    if(cow(pagetable, va0) < 0) return -1;
     pte = walk(pagetable, va0, 0);
     if(pte == 0 || (*pte & PTE_V) == 0 || (*pte & PTE_U) == 0 ||
        (*pte & PTE_W) == 0)
@@ -436,11 +474,12 @@ copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
         *dst = *p;
       }
       --n;
+      // incase we need to copy past a page boundary
       --max;
       p++;
       dst++;
     }
-
+    // incase we need to copy past a page boundary
     srcva = va0 + PGSIZE;
   }
   if(got_null){
