@@ -107,8 +107,8 @@ usertrap(void)
     // ok
   } else if(r_scause() == 15) {
     // 12 is a instruction fetch, 13 is read, 15 is write
-    if(cow(p->pagetable, r_stval()) < 0) {
-      // printf("write to unwrittable memory or ran out of memory for COW.");
+    if(cow(p->pagetable, r_stval()) != 0) {
+      printf("write to unwrittable memory or ran out of memory for COW.");
       setkilled(p);
     }
   }
