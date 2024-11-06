@@ -33,6 +33,7 @@ readsb(int dev, struct superblock *sb)
   struct buf *bp;
 
   bp = bread(dev, 1);
+  printf("%s\n", bp->data);
   memmove(sb, bp->data, sizeof(*sb));
   brelse(bp);
 }
