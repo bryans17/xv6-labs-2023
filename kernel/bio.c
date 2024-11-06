@@ -70,9 +70,11 @@ hget(uint dev, uint blockno)
   acquiresleep(&bcache.hashtable[hash_idx].bucket_lock);
   // check if there is a cached buf for (dev, blockno)
   struct buf* b;
-  printf("head: %p, hashidx: %d\n", bcache.hashtable[hash_idx].head, hash_idx);
+  //printf("head: %p, hashidx: %d\n", bcache.hashtable[hash_idx].head, hash_idx);
+  b=bcache.hashtable[hash_idx].head;
+  //printf("b: %p\n", b);
   for(b=bcache.hashtable[hash_idx].head; b != 0; b=b->next){
-    printf("b: %p, hashidx: %d\n", b, hash_idx);
+    //printf("b: %p, hashidx: %d\n", b, hash_idx);
     if(b->dev == dev && b->blockno == blockno){
       b->refcnt++;
       releasesleep(&bcache.hashtable[hash_idx].bucket_lock);
@@ -86,11 +88,13 @@ hget(uint dev, uint blockno)
   if(bcache.freelist == 0) {
     panic("hget: no buffers");
   }
-  printf("allocating block: %p for dev %d, and blockno %d\n", bcache.freelist, dev, blockno);
+  //printf("allocating block: %p for dev %d, and blockno %d\n", bcache.freelist, dev, blockno);
   b = bcache.freelist;
-  bcache.freelist = b->next;
+  bcache.freelist = bcache.freelist->next;
+  if(bcache.freelist != 0) bcache.freelist->prev = 0;
   b->next = bcache.hashtable[hash_idx].head;
   release(&bcache.lock);
+
   if(b->next != 0) {
     b->next->prev = b;
   }
@@ -100,7 +104,7 @@ hget(uint dev, uint blockno)
   b->valid = 0;
   b->dev = dev;
   b->blockno = blockno;
-  printf("bucket head: %p, bucket %d blockno %d\n", bcache.hashtable[hash_idx].head, hash_idx, blockno);
+  //printf("bucket head: %p, hashidx %d blockno %d\n", bcache.hashtable[hash_idx].head, hash_idx, blockno);
   releasesleep(&bcache.hashtable[hash_idx].bucket_lock);
   acquiresleep(&b->lock);
   return b;
@@ -122,12 +126,12 @@ binit(void)
     bcache.buf[i].next = &bcache.buf[i+1];
     bcache.buf[i+1].prev = &bcache.buf[i];
     bcache.buf[i].valid = 0;
-    bcache.buf[i].refcnt = 0;
+    bcache.buf[i].refcnt = 1;
     initsleeplock(&bcache.buf[i].lock, "bcache.buffer");
   }
   bcache.buf[NBUF-1].next = 0;
   bcache.buf[NBUF-1].valid = 0;
-  bcache.buf[NBUF-1].refcnt = 0;
+  bcache.buf[NBUF-1].refcnt = 1;
   initsleeplock(&bcache.buf[NBUF-1].lock, "bcache.buffer");
 
   // init hashtable
@@ -211,13 +215,54 @@ brelse(struct buf *b)
 
   uint hash_idx = hash(b->dev, b->blockno);
 
+  //printf("releasing: b %p, dev %d blockno %d hashidx %d\n", b,b->dev,b->blockno,hash_idx);
   b->refcnt--;
   if (b->refcnt == 0) {
     remove = 1;
   }
-  releasesleep(&b->lock);
 
   if(remove == 1) {
+    acquiresleep(&bcache.hashtable[hash_idx].bucket_lock);
+  //printf("remove before: bucket head %p\n", bcache.hashtable[hash_idx].head);
+    if(b->prev != 0) {
+      b->prev->next = b->next;
+    }
+    if(b->next != 0) {
+      b->next->prev = b->prev;
+    }
+    if(b== bcache.hashtable[hash_idx].head) {
+      // is head
+      bcache.hashtable[hash_idx].head = b->next;
+    }
+  //printf("remove after: bucket head %p\n", bcache.hashtable[hash_idx].head);
+    releasesleep(&bcache.hashtable[hash_idx].bucket_lock);
+
+    // add to freelist
+    acquire(&bcache.lock);
+
+    //printf("remove before: freelist head %p\n", bcache.freelist);
+    b->next = bcache.freelist;
+    if(bcache.freelist != 0) bcache.freelist->prev = b;
+    bcache.freelist = b;
+    //printf("remove after: freelist head %p\n", bcache.freelist);
+    release(&bcache.lock);
+  }
+  releasesleep(&b->lock);
+}
+
+void
+bpin(struct buf *b) {
+  //acquiresleep(&b->lock);
+  b->refcnt++;
+  //releasesleep(&b->lock);
+}
+
+void
+bunpin(struct buf *b) {
+  //acquiresleep(&b->lock);
+  b->refcnt--;
+  uint hash_idx = hash(b->dev, b->blockno);
+  if(b->refcnt == 0) {
     acquiresleep(&bcache.hashtable[hash_idx].bucket_lock);
     if(b->prev != 0) {
       b->prev->next = b->next;
@@ -228,7 +273,6 @@ brelse(struct buf *b)
     if(b== bcache.hashtable[hash_idx].head) {
       // is head
       bcache.hashtable[hash_idx].head = b->next;
-      if(b->next != 0) b->next->prev = 0;
     }
     releasesleep(&bcache.hashtable[hash_idx].bucket_lock);
 
@@ -238,20 +282,6 @@ brelse(struct buf *b)
     if(bcache.freelist != 0) bcache.freelist->prev = b;
     release(&bcache.lock);
   }
-}
 
-void
-bpin(struct buf *b) {
-  acquire(&bcache.lock);
-  b->refcnt++;
-  release(&bcache.lock);
 }
-
-void
-bunpin(struct buf *b) {
-  acquire(&bcache.lock);
-  b->refcnt--;
-  release(&bcache.lock);
-}
-
 
